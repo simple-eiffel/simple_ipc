@@ -4,7 +4,9 @@ note
 		Uses inline C for cross-platform socket operations.
 
 		Platform: Linux, macOS (Unix-like systems)
-		Transport: Unix domain sockets (/var/run/name.sock)
+		Transport: Unix domain sockets. A plain name maps to
+		/tmp/simple_ipc_<name>.sock, so client and server meet by name as with
+		Windows named pipes. A name holding a slash is used as a path.
 
 		Primarily used for:
 		- Docker daemon communication (/var/run/docker.sock)
@@ -28,25 +30,45 @@ feature {NONE} -- Initialization
 
 	make_server (a_name: READABLE_STRING_GENERAL)
 			-- Create a Unix socket server with `a_name'.
-			-- Note: Server functionality not yet implemented.
+			-- On Windows this stays unimplemented: named pipes do the job there.
 		require
 			name_not_empty: not a_name.is_empty
+		local
+			l_path: STRING_8
+			l_text: C_STRING
+			l_fd: INTEGER
 		do
-			socket_path := a_name.to_string_8
 			is_server_internal := True
-			error_message := "Unix socket server not yet implemented"
+			if {PLATFORM}.is_windows then
+				socket_path := a_name.to_string_8
+				error_message := "Unix socket server not yet implemented"
+			else
+				l_path := path_of (a_name)
+				socket_path := l_path
+				create l_text.make (l_path)
+				l_fd := c_socket_create
+				if l_fd < 0 then
+					error_message := "Failed to create Unix socket"
+				elseif c_socket_listen (l_fd, l_text.item) /= 0 then
+					error_message := "Failed to listen on Unix socket: " + l_path
+					c_socket_close (l_fd)
+				else
+					listener_fd := l_fd
+				end
+			end
 		end
 
 	make_client (a_name: READABLE_STRING_GENERAL)
 			-- Connect to a Unix socket at `a_name'.
-			-- `a_name' should be full path like "/var/run/docker.sock"
+			-- `a_name' is a full path like "/var/run/docker.sock", or a plain
+			-- name a server on this machine was made with.
 		require
 			name_not_empty: not a_name.is_empty
 		local
 			l_path: STRING_8
 			l_fd: INTEGER
 		do
-			l_path := a_name.to_string_8
+			l_path := path_of (a_name)
 			socket_path := l_path
 			is_server_internal := False
 			error_message := Void
@@ -75,13 +97,13 @@ feature -- Status
 	is_valid: BOOLEAN
 			-- Is the socket handle valid?
 		do
-			Result := socket_fd > 0
+			Result := socket_fd > 0 or listener_fd > 0
 		end
 
 	is_connected: BOOLEAN
 			-- Is the socket connected?
 		do
-			Result := is_valid and is_connected_internal
+			Result := socket_fd > 0 and is_connected_internal
 		end
 
 	is_server: BOOLEAN
@@ -110,18 +132,37 @@ feature -- Server Operations
 
 	wait_for_connection (a_timeout_ms: INTEGER)
 			-- Wait for a client to connect.
-			-- Note: Server functionality not yet implemented.
+		local
+			l_fd: INTEGER
 		do
 			last_wait_succeeded_internal := False
-			error_message := "Unix socket server not yet implemented"
+			if listener_fd > 0 then
+				error_message := Void
+				l_fd := c_socket_accept (listener_fd, a_timeout_ms)
+				if l_fd >= 0 then
+					close_client
+					socket_fd := l_fd
+					is_connected_internal := True
+					last_wait_succeeded_internal := True
+				else
+					error_message := "No client connected"
+				end
+			else
+				error_message := "Unix socket server not yet implemented"
+			end
 		end
 
 	disconnect
 			-- Disconnect from client and prepare for new connection.
-			-- Note: Server functionality not yet implemented.
 		do
 			last_disconnect_succeeded_internal := False
-			error_message := "Unix socket server not yet implemented"
+			if listener_fd > 0 then
+				close_client
+				error_message := Void
+				last_disconnect_succeeded_internal := True
+			else
+				error_message := "Unix socket server not yet implemented"
+			end
 		end
 
 feature -- Read Operations
@@ -261,13 +302,16 @@ feature -- Write Operations
 feature -- Operations
 
 	close
-			-- Close and release the socket.
+			-- Close and release the socket. A server also removes its socket file.
 		do
-			if socket_fd > 0 then
-				c_socket_close (socket_fd)
-				socket_fd := 0
+			close_client
+			if listener_fd > 0 then
+				c_socket_close (listener_fd)
+				listener_fd := 0
+				if attached socket_path as l_path then
+					c_socket_unlink ((create {C_STRING}.make (l_path)).item)
+				end
 			end
-			is_connected_internal := False
 			error_message := Void
 		end
 
@@ -300,7 +344,31 @@ feature -- Status Report
 feature {NONE} -- Implementation
 
 	socket_fd: INTEGER
-			-- Unix socket file descriptor (0 = invalid/closed).
+			-- Connected Unix socket file descriptor (0 = invalid/closed).
+
+	listener_fd: INTEGER
+			-- A server's listening descriptor (0 = none).
+
+	path_of (a_name: READABLE_STRING_GENERAL): STRING_8
+			-- The socket path for `a_name'.
+		do
+			Result := a_name.to_string_8
+			if not Result.has ('/') then
+				Result := "/tmp/simple_ipc_" + Result + ".sock"
+			end
+		end
+
+	close_client
+			-- Close the connected socket, if any.
+		do
+			if socket_fd > 0 then
+				c_socket_close (socket_fd)
+				socket_fd := 0
+			end
+			is_connected_internal := False
+		ensure
+			closed: socket_fd = 0 and not is_connected_internal
+		end
 
 	socket_path: detachable STRING_8
 			-- Path to the Unix socket.
@@ -338,7 +406,11 @@ feature {NONE} -- C Externals
 				#if defined(EIF_WINDOWS) || defined(_WIN32)
 					return -1;
 				#else
-					return socket(AF_UNIX, SOCK_STREAM, 0);
+					{
+					int l_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+					if (l_fd >= 0) sus_no_sigpipe(l_fd);
+					return l_fd;
+					}
 				#endif
 			]"
 		end
@@ -368,7 +440,7 @@ feature {NONE} -- C Externals
 			-- Read from socket. Returns bytes read, 0 for EOF, -1 on error.
 			-- Returns -1 on Windows (not supported).
 		external
-			"C inline use %"unix_socket.h%""
+			"C blocking inline use %"unix_socket.h%""
 		alias
 			"[
 				#if defined(EIF_WINDOWS) || defined(_WIN32)
@@ -383,13 +455,56 @@ feature {NONE} -- C Externals
 			-- Write to socket. Returns bytes written, -1 on error.
 			-- Returns -1 on Windows (not supported).
 		external
+			"C blocking inline use %"unix_socket.h%""
+		alias
+			"[
+				#if defined(EIF_WINDOWS) || defined(_WIN32)
+					return -1;
+				#else
+					return sus_send((int) $a_fd, (const void*) $a_data, (int) $a_size);
+				#endif
+			]"
+		end
+
+	c_socket_listen (a_fd: INTEGER; a_path: POINTER): INTEGER
+			-- Bind `a_fd' to `a_path' and listen. 0 on success, -1 on error.
+			-- Returns -1 on Windows (not supported).
+		external
 			"C inline use %"unix_socket.h%""
 		alias
 			"[
 				#if defined(EIF_WINDOWS) || defined(_WIN32)
 					return -1;
 				#else
-					return write($a_fd, $a_data, $a_size);
+					return sus_listen((int) $a_fd, (const char*) $a_path);
+				#endif
+			]"
+		end
+
+	c_socket_accept (a_fd, a_timeout_ms: INTEGER): INTEGER
+			-- Wait for a client on `a_fd'. Its descriptor, or -1. Marked `blocking':
+			-- it waits, and takes no Eiffel memory.
+			-- Returns -1 on Windows (not supported).
+		external
+			"C blocking inline use %"unix_socket.h%""
+		alias
+			"[
+				#if defined(EIF_WINDOWS) || defined(_WIN32)
+					return -1;
+				#else
+					return sus_accept((int) $a_fd, (int) $a_timeout_ms);
+				#endif
+			]"
+		end
+
+	c_socket_unlink (a_path: POINTER)
+			-- Remove the socket file `a_path'. No-op on Windows.
+		external
+			"C inline use %"unix_socket.h%""
+		alias
+			"[
+				#if !defined(EIF_WINDOWS) && !defined(_WIN32)
+					unlink((const char*) $a_path);
 				#endif
 			]"
 		end

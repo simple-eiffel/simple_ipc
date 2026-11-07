@@ -41,11 +41,12 @@ feature -- Initialization
 			l_passed := l_passed + run_test (l_tests, "test_unix_socket_stub_client", agent l_tests.test_unix_socket_stub_client)
 
 			-- Status tests
+			l_passed := l_passed + run_test (l_tests, "test_round_trip", agent l_tests.test_round_trip)
 			l_passed := l_passed + run_test (l_tests, "test_read_count_initial", agent l_tests.test_read_count_initial)
 			l_passed := l_passed + run_test (l_tests, "test_write_count_initial", agent l_tests.test_write_count_initial)
 			l_passed := l_passed + run_test (l_tests, "test_wait_disconnect_initial_status", agent l_tests.test_wait_disconnect_initial_status)
 
-			l_failed := 14 - l_passed
+			l_failed := 15 - l_passed
 
 			print ("%N======================================%N")
 			print ("Results: " + l_passed.out + " passed, " + l_failed.out + " failed%N")
