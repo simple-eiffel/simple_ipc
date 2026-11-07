@@ -4,7 +4,7 @@ note
 
 		Platform-aware factory that creates the appropriate connection:
 		- Windows: Named pipes via NAMED_PIPE_CONNECTION
-		- Linux/macOS: Unix sockets via UNIX_SOCKET_CONNECTION (future)
+		- Linux/macOS: Unix sockets via UNIX_SOCKET_CONNECTION
 
 		Maintains backward compatibility with previous SIMPLE_IPC API.
 		All consumers can continue using SIMPLE_IPC without changes.

@@ -151,11 +151,13 @@ feature -- Test: Named Pipe Connection Direct Use
 		local
 			l_pipe: NAMED_PIPE_CONNECTION
 		do
-			create l_pipe.make_server (test_pipe_name)
-			assert ("pipe valid", l_pipe.is_valid)
-			assert ("pipe is server", l_pipe.is_server)
-			l_pipe.close
-			assert ("pipe closed", not l_pipe.is_valid)
+			if {PLATFORM}.is_windows then
+				create l_pipe.make_server (test_pipe_name)
+				assert ("pipe valid", l_pipe.is_valid)
+				assert ("pipe is server", l_pipe.is_server)
+				l_pipe.close
+				assert ("pipe closed", not l_pipe.is_valid)
+			end
 		end
 
 	test_named_pipe_direct_client_no_server
@@ -163,39 +165,75 @@ feature -- Test: Named Pipe Connection Direct Use
 		local
 			l_pipe: NAMED_PIPE_CONNECTION
 		do
-			create l_pipe.make_client ("NonexistentPipe54321")
-			assert ("pipe not valid", not l_pipe.is_valid or else not l_pipe.is_connected)
-			assert ("has error", l_pipe.last_error /= Void)
-			l_pipe.close
+			if {PLATFORM}.is_windows then
+				create l_pipe.make_client ("NonexistentPipe54321")
+				assert ("pipe not valid", not l_pipe.is_valid or else not l_pipe.is_connected)
+				assert ("has error", l_pipe.last_error /= Void)
+				l_pipe.close
+			end
 		end
 
 feature -- Test: Unix Socket Stub (Placeholder)
 
 	test_unix_socket_stub_server
-			-- Test Unix socket stub returns not implemented.
+			-- On Windows the Unix socket is a stub; elsewhere the server is real.
 		local
 			l_socket: UNIX_SOCKET_CONNECTION
 		do
 			create l_socket.make_server (test_pipe_name)
-			-- Stub should indicate not implemented
-			assert ("not valid (stub)", not l_socket.is_valid)
-			assert ("has error message", attached l_socket.last_error as err and then err.has_substring ("not yet implemented"))
+			if {PLATFORM}.is_windows then
+				assert ("not valid (stub)", not l_socket.is_valid)
+				assert ("has error message", attached l_socket.last_error as err and then err.has_substring ("not yet implemented"))
+			else
+				assert ("server valid", l_socket.is_valid)
+				assert ("is server", l_socket.is_server)
+				assert ("not connected", not l_socket.is_connected)
+			end
 			l_socket.close
+			assert ("closed", not l_socket.is_valid)
 		end
 
 	test_unix_socket_stub_client
-			-- Test Unix socket client stub returns not implemented.
+			-- A client with no server: not implemented on Windows, refused elsewhere.
 		local
 			l_socket: UNIX_SOCKET_CONNECTION
 		do
 			create l_socket.make_client (test_pipe_name)
-			-- Stub should indicate not implemented
-			assert ("not valid (stub)", not l_socket.is_valid)
-			assert ("has error message", attached l_socket.last_error as err and then err.has_substring ("not yet implemented"))
+			assert ("not valid", not l_socket.is_valid)
+			if {PLATFORM}.is_windows then
+				assert ("has error message", attached l_socket.last_error as err and then err.has_substring ("not yet implemented"))
+			else
+				assert ("has error message", attached l_socket.last_error as al_err and then al_err.has_substring ("connect"))
+			end
 			l_socket.close
 		end
 
 feature -- Test: Read/Write Status
+
+	test_round_trip
+			-- A server and a client exchange text, by name, on any platform.
+		local
+			l_server, l_client: SIMPLE_IPC
+		do
+			if not {PLATFORM}.is_windows then
+				create l_server.make_server (test_pipe_name)
+				assert ("server valid", l_server.is_valid)
+				create l_client.make_client (test_pipe_name)
+				assert ("client connected", l_client.is_connected)
+				l_server.wait_for_connection (5000)
+				assert ("accepted", l_server.last_wait_succeeded)
+				assert ("server connected", l_server.is_connected)
+				l_client.write_string ("ping%N")
+				assert ("server read", l_server.read_line.same_string ("ping"))
+				l_server.write_string ("pong%N")
+				assert ("client read", l_client.read_line.same_string ("pong"))
+				l_client.close
+				l_server.disconnect
+				assert ("disconnected", l_server.last_disconnect_succeeded and not l_server.is_connected)
+				assert ("still listening", l_server.is_valid)
+				l_server.close
+			end
+		end
 
 	test_read_count_initial
 			-- Test that read count starts at zero.
