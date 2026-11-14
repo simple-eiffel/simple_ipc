@@ -23,7 +23,7 @@
 SIMPLE_IPC provides SCOOP-compatible inter-process communication for Eiffel applications with platform-specific transports:
 
 - **Windows:** Named Pipes (`\\.\pipe\name`)
-- **Linux/macOS:** Unix Domain Sockets (`/var/run/name.sock`) *(coming soon)*
+- **Linux/macOS:** Unix Domain Sockets (a plain name becomes `/tmp/simple_ipc_<name>.sock`)
 
 The library uses a facade pattern with a common `IPC_CONNECTION` interface, automatically selecting the appropriate transport for the current platform.
 
@@ -46,8 +46,8 @@ SIMPLE_IPC (facade)
 | Platform | Transport | Status |
 |----------|-----------|--------|
 | Windows | Named Pipes | Implemented |
-| Linux | Unix Sockets | Stub (coming soon) |
-| macOS | Unix Sockets | Stub (coming soon) |
+| Linux | Unix Sockets | Implemented |
+| macOS | Unix Sockets | Implemented |
 
 ### Operations
 
@@ -74,7 +74,7 @@ git clone https://github.com/simple-eiffel/simple_ipc.git
 set SIMPLE_EIFFEL=D:\prod
 
 # Linux/macOS
-export SIMPLE_EIFFEL=/path/to/prod
+export SIMPLE_EIFFEL=$HOME/simple_eiffel
 ```
 
 3. Add to your ECF file:
@@ -168,17 +168,25 @@ The abstract interface implemented by all platform-specific connections. Use thi
 
 ### NAMED_PIPE_CONNECTION (Windows)
 
-Direct access to Windows Named Pipes. Same API as `SIMPLE_IPC`.
+Direct access to Windows Named Pipes. Same API as `SIMPLE_IPC`. (Windows only; use UNIX_SOCKET_CONNECTION on macOS/Linux)
 
 ### UNIX_SOCKET_CONNECTION (Linux/macOS)
 
-Unix domain socket implementation. Currently a stub - returns "not yet implemented" errors.
+Unix domain socket implementation for macOS and Linux. Not available on Windows.
 
 ---
 
 ## Building & Testing
 
 ### Compile Library
+
+The ECF links `Clib/simple_ipc.o`, which is not in git. On macOS and Linux, build it once first:
+
+```bash
+make -C Clib
+```
+
+Then compile:
 
 ```bash
 cd simple_ipc
@@ -203,12 +211,14 @@ simple_ipc/
 ├── Clib/                           # C wrapper library
 │   ├── simple_ipc.h                # Win32 pipe header
 │   ├── simple_ipc.c                # Win32 pipe implementation
-│   └── compile.bat                 # Build script
+│   ├── unix_socket.h               # Unix domain socket code (macOS/Linux)
+│   ├── compile.bat                 # Build script (Windows)
+│   └── Makefile                    # make -C Clib (macOS/Linux)
 ├── src/                            # Eiffel source
 │   ├── simple_ipc.e                # Facade (platform detection)
 │   ├── ipc_connection.e            # Deferred base class
 │   ├── named_pipe_connection.e     # Windows implementation
-│   └── unix_socket_connection.e    # Unix stub (Phase 2)
+│   └── unix_socket_connection.e    # macOS/Linux implementation
 ├── testing/                        # Test suite
 │   ├── lib_tests.e                 # Test cases
 │   └── test_app.e                  # Test runner
@@ -226,7 +236,7 @@ simple_ipc/
 
 - **EiffelStudio 23.09+** - Development environment
 - **Windows:** Visual Studio C++ Build Tools (for C wrapper)
-- **Linux/macOS:** GCC (for future Unix socket support)
+- **Linux/macOS:** clang or gcc; run `make -C Clib` once
 
 ---
 
@@ -234,7 +244,7 @@ simple_ipc/
 
 - [x] Windows Named Pipes (v1.0)
 - [x] Cross-platform architecture (v2.0)
-- [ ] Unix Domain Sockets (Phase 2)
+- [x] Unix Domain Sockets (macOS, Linux)
 - [ ] Connection pooling
 - [ ] Async I/O support
 
